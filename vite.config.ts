@@ -22,6 +22,12 @@ export default defineConfig(({ mode }) => ({
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,jpg,jpeg,webp,woff,woff2}"],
         navigateFallbackDenylist: [/^\/~oauth/],
+        // public/sw-push.js has the push/notificationclick handlers, but
+        // vite-plugin-pwa's generateSW strategy builds and registers its own
+        // service worker for caching — that file was never loaded into it,
+        // so a subscribed user would never actually see a push notification.
+        // importScripts pulls its handlers into the generated SW at runtime.
+        importScripts: ["/sw-push.js"],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,

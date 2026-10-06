@@ -1,0 +1,37 @@
+-- CRITICAL: escrows had a client-facing INSERT policy ("Payers can create
+-- escrow", WITH CHECK auth.uid() = payer_id only) and a client-facing UPDATE
+-- policy ("Participants can update escrow", USING payer_id/payee_id = auth.uid(),
+-- with NO WITH CHECK restricting which columns change). Every legitimate path
+-- creates/mutates escrows exclusively through fund_escrow()/release_escrow()/
+-- raise_dispute()/admin_resolve_dispute(), all SECURITY DEFINER — no frontend
+-- code ever does a direct .insert()/.update() on "escrows". These two policies
+-- had no legitimate use and were pure attack surface:
+--
+-- A direct INSERT bypasses fund_escrow() entirely: no wallet debit, no
+-- double-funding check, no verification that payee_id is the job's real
+-- artisan. Any authenticated user could insert a fabricated 'held' escrow on
+-- their own real job for any amount, naming any payee, then call the
+-- already-hardened complete_job() (Fix #7) as the real customer they are —
+-- which finds the fabricated escrow and calls release_escrow(), which credits
+-- the named payee's wallet with the fabricated amount. No one is debited: it
+-- is money created from nothing, immediately withdrawable via the real
+-- Paystack payout RPC. Proved against the original policies with a local
+-- Postgres harness: a fabricated ₦999,999,999 escrow was released and
+-- credited to an attacker-controlled wallet with zero debits anywhere.
+--
+-- The UPDATE policy is exploitable the same way against a REAL, already
+-- legitimately-funded escrow: since it has no WITH CHECK, either participant
+-- could directly rewrite amount/payee_id on their own still-held escrow
+-- before it's released, redirecting or inflating the eventual payout.
+--
+-- Same shape of bug on wallet_transactions: "Users can insert own
+-- transactions" only checked wallet ownership, letting any user forge fake
+-- credit/debit rows in their own transaction history (it does not touch
+-- wallets.balance — no trigger reads it — so it can't drain funds directly,
+-- but it lets a user fabricate fake "payment received"/"refunded" records to
+-- use as social-engineering evidence). No frontend code ever inserts into
+-- wallet_transactions directly either; every real transaction row is written
+-- by a SECURITY DEFINER RPC.
+DROP POLICY IF EXISTS "Payers can create escrow" ON public.escrows;
+DROP POLICY IF EXISTS "Participants can update escrow" ON public.escrows;
+DROP POLICY IF EXISTS "Users can insert own transactions" ON public.wallet_transactions;

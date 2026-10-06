@@ -95,5 +95,26 @@ GRANT EXECUTE ON FUNCTION public.artisan_mark_complete(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.complete_job(uuid, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.calculate_trust_score(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.raise_dispute(uuid, uuid, uuid, uuid, text, text, text[]) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.generate_phone_otp(uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.verify_phone_otp(uuid, text) TO authenticated;
+
+-- generate_phone_otp/verify_phone_otp were created by hand on the live
+-- project (they show up in the generated types.ts) but never captured by a
+-- migration here, so a fresh database has no such functions at this point in
+-- the history. A plain GRANT on a nonexistent function aborts the whole
+-- migration (unlike DROP POLICY IF EXISTS above, there's no IF EXISTS form
+-- for GRANT), which would silently block every migration after this one from
+-- ever applying. Tolerate their absence the same way the REVOKE loop above
+-- already does, instead of hard-failing the entire chain over two RPCs the
+-- frontend doesn't even call.
+DO $$
+BEGIN
+  GRANT EXECUTE ON FUNCTION public.generate_phone_otp(uuid) TO authenticated;
+EXCEPTION WHEN undefined_function THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  GRANT EXECUTE ON FUNCTION public.verify_phone_otp(uuid, text) TO authenticated;
+EXCEPTION WHEN undefined_function THEN
+  NULL;
+END $$;

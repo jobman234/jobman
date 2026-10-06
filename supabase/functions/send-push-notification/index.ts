@@ -19,6 +19,18 @@ interface PushPayload {
   icon?: string;
 }
 
+// Plain === on a secret comparison leaks timing information byte-by-byte;
+// compare as bytes instead so a mismatched bearer token can't be guessed
+// incrementally from response latency.
+function timingSafeEqual(a: string, b: string): boolean {
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  if (aBytes.length !== bBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) diff |= aBytes[i] ^ bBytes[i];
+  return diff === 0;
+}
+
 const handler = async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -36,6 +48,26 @@ const handler = async (req: Request): Promise<Response> => {
 
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       throw new Error("Supabase config not set");
+    }
+
+    // Nothing in this app calls this function as an end-user-facing feature —
+    // it exists purely as an internal utility other server-side code invokes
+    // to push a notification to an arbitrary user_id. It must never accept
+    // calls signed with just the public anon key (or any regular user's
+    // JWT): the anon key ships in every browser bundle, so without this
+    // check anyone on the internet could pass any userId and have this
+    // function fetch that real user's Web Push credentials (via the
+    // service-role client below, which bypasses RLS) and deliver an
+    // attacker-authored push notification — title, body and URL all
+    // attacker-controlled — that the browser displays as coming from Jobman.
+    // Restrict it to server-to-server calls authenticated with the actual
+    // service role key.
+    const authHeader = req.headers.get("Authorization") ?? "";
+    if (!timingSafeEqual(authHeader, `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`)) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
     }
 
     const { userId, title, body, url, icon }: PushPayload = await req.json();

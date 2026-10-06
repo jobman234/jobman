@@ -1,0 +1,28 @@
+-- CRITICAL: "Service can read all subscriptions" on push_subscriptions was
+-- FOR SELECT TO authenticated USING (true) — despite its name, it was never
+-- scoped to service_role at all. Any logged-in user could
+-- `select * from push_subscriptions` and harvest every other user's Web Push
+-- credentials (endpoint, p256dh, auth) — exactly what's needed to push
+-- attacker-authored notifications straight to a stranger's browser, no
+-- server-side code involved.
+--
+-- It was also entirely unnecessary: the only place that reads across all
+-- users' subscriptions is supabase/functions/send-push-notification, which
+-- already uses the service-role client — that bypasses RLS regardless of
+-- any policy here, the same as every other SECURITY DEFINER/service-role
+-- path fixed earlier this session. No frontend code ever reads another
+-- user's subscription (usePushNotifications.ts only manages the caller's
+-- own row via the "Users can manage own subscriptions" policy, which is
+-- unaffected by this change and stays in place).
+--
+-- Proved with a local Postgres harness: an unrelated authenticated account
+-- read a victim's real endpoint/p256dh/auth triple before this fix, blocked
+-- after it, while the victim's own read of their own row kept working.
+--
+-- Paired with a fix to send-push-notification/index.ts itself, which took
+-- {userId, title, body, url} straight from the request body with no caller
+-- verification at all — reachable by anyone holding the public anon key
+-- (i.e. anyone who has ever loaded the site), letting them send a fully
+-- attacker-authored push notification to any real user by guessing/knowing
+-- their user id.
+DROP POLICY IF EXISTS "Service can read all subscriptions" ON public.push_subscriptions;

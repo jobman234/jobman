@@ -1,0 +1,32 @@
+-- FUNCTIONAL REGRESSION, found while auditing the migration that introduced
+-- it (20260613184806): "ALTER VIEW public.public_profiles SET
+-- (security_invoker = true)" was almost certainly meant as a hardening step,
+-- but it landed right after the same day's migration that replaced the
+-- broad "Public can view profiles of public artisans" policy on the base
+-- profiles table with owner-only + admin-only SELECT. Combined, those two
+-- changes silently neuter public_profiles: with security_invoker = true, the
+-- view re-evaluates the BASE TABLE's now-restrictive RLS as the querying
+-- user, so anyone looking up someone else's name/avatar/state/lga through
+-- this view gets zero rows back — only their own.
+--
+-- public_profiles was created specifically to be safe to expose broadly (it
+-- only ever selects user_id, full_name, avatar_url, state, lga — no email,
+-- phone, address, NIN, or anything else sensitive). Its safety comes from
+-- that narrow column list, not from deferring to the base table's RLS —
+-- the same trusted-view pattern this codebase already uses deliberately for
+-- active_profile_boosts. Running it with the view owner's privileges (the
+-- default, security_invoker = false) is what makes it work as designed.
+--
+-- Confirmed with a local Postgres harness: with security_invoker = true, a
+-- customer querying public_profiles for another user's name got 0 rows;
+-- reverting to security_invoker = false restored it while the view still
+-- exposes only its original 5 curated columns.
+--
+-- This one silently broke real, already-shipped functionality: artisan
+-- names in Find Artisan search and the featured-artisans section, sender
+-- names in job chat, an artisan's own public profile page for any visitor
+-- who isn't them or an admin, and the chatbot's search_artisans tool
+-- (queried under the customer's own session, not service role) — all of
+-- them would have been silently falling back to generic placeholders
+-- ("Artisan", "User") instead of showing real names.
+ALTER VIEW public.public_profiles SET (security_invoker = false);

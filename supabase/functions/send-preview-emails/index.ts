@@ -154,12 +154,36 @@ const EMAIL_TEMPLATES = {
   },
 }
 
+// Plain === on a secret comparison leaks timing information byte-by-byte;
+// compare as bytes instead so a mismatched bearer token can't be guessed
+// incrementally from response latency.
+function timingSafeEqual(a: string, b: string): boolean {
+  const aBytes = new TextEncoder().encode(a)
+  const bBytes = new TextEncoder().encode(b)
+  if (aBytes.length !== bBytes.length) return false
+  let diff = 0
+  for (let i = 0; i < aBytes.length; i++) diff |= aBytes[i] ^ bBytes[i]
+  return diff === 0
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
   try {
+    // Dev/admin-only preview tool — no caller check meant anyone holding the
+    // public anon key could trigger real sends from Jobman's domain to any
+    // address they chose. Restrict to service-role callers only.
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    if (!serviceRoleKey || !timingSafeEqual(authHeader, `Bearer ${serviceRoleKey}`)) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      })
+    }
+
     const resendApiKey = Deno.env.get('RESEND_API_KEY')
     if (!resendApiKey) {
       return new Response(JSON.stringify({ error: 'Missing RESEND_API_KEY' }), {

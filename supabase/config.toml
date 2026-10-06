@@ -8,3 +8,18 @@ verify_jwt = false
 
 [functions.chatbot]
 verify_jwt = false
+
+[functions.fund-wallet]
+verify_jwt = true
+
+[functions.paystack-webhook]
+verify_jwt = false
+
+[functions.resolve-bank-account]
+verify_jwt = true
+
+[functions.request-withdrawal]
+verify_jwt = true
+
+[functions.process-withdrawal]
+verify_jwt = true

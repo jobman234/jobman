@@ -1,0 +1,25 @@
+-- CRITICAL: "Customers can create jobs" is a leftover from before this
+-- product moved to admin-mediated matching. It never restricted status,
+-- assigned_artisan_id, agreed_price, or agreed_timeline — only that
+-- customer_id = auth.uid(). No frontend code has inserted into "jobs"
+-- directly since the redesign (the only creation path is
+-- admin_assign_request(), a SECURITY DEFINER RPC that bypasses RLS
+-- entirely and is unaffected by dropping this policy).
+--
+-- Left open, a customer could directly fabricate a job row already
+-- "assigned" to any real artisan account, with any agreed_price/timeline,
+-- entirely bypassing admin's matching step — then call the already-hardened
+-- fund_escrow() (Fix #7), whose own validation checks assigned_artisan_id
+-- against the job it's given, but that job is the attacker's own fabricated
+-- row. This doesn't fabricate money (the attacker still pays from their own
+-- real wallet balance), but it completely bypasses Jobman's core "admin
+-- brokers every match" model and can force real escrow payments to any
+-- artisan account without their and admin's involvement in matching.
+--
+-- Proved with a local Postgres harness: a fabricated job "assigned" to an
+-- uninvolved artisan let fund_escrow() release a real ₦50,000 payment to
+-- them with no admin ever brokering it. Blocked after this fix (INSERT
+-- rejected by RLS before fund_escrow is ever reached); confirmed the
+-- trusted admin_assign_request() creation path is unaffected since it runs
+-- SECURITY DEFINER.
+DROP POLICY IF EXISTS "Customers can create jobs" ON public.jobs;

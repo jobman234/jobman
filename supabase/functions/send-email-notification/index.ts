@@ -195,12 +195,41 @@ function buildEmailHtml(eventType: string, details: Record<string, string>, subj
   }
 }
 
+// Plain === on a secret comparison leaks timing information byte-by-byte;
+// compare as bytes instead so a mismatched bearer token can't be guessed
+// incrementally from response latency.
+function timingSafeEqual(a: string, b: string): boolean {
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  if (aBytes.length !== bBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) diff |= aBytes[i] ^ bBytes[i];
+  return diff === 0;
+}
+
 const handler = async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Every legitimate caller (the DB triggers in supabase/migrations that
+    // fire on job/escrow/dispute events, and weekly-verification-reminder)
+    // already calls this with the service-role key as bearer, matching the
+    // convention process-email-queue enforces explicitly. This function
+    // never checked that, so it was reachable by anyone holding just the
+    // public anon key: to/subject/eventType/details are all attacker
+    // controlled and get sent from Jobman's real, authenticated domain —
+    // a complete unauthenticated phishing/spam relay to any address.
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!serviceRoleKey || !timingSafeEqual(authHeader, `Bearer ${serviceRoleKey}`)) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+
     const { to, subject, eventType, details }: EmailRequest = await req.json();
 
     if (!to || !subject || !eventType) {
